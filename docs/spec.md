@@ -22,6 +22,8 @@ Claude Code スキルの改善ループを回すための「摩擦（friction）
 3. `report.ts` が alias 解決込みで issue_type 別 × skill 別の集計を出力できる
 4. 同じ転写範囲を二重処理しても issues が重複しない（冪等）
 5. taxonomy v1 凍結の判断材料として **other 率**が計測できる（凍結条件: other 率 < 20%)
+6. スキル改訂の取り込みが resolutions.jsonl に記録され、report.ts が open / resolved / verified / reopened を
+   ログのみから導出できる(状態フラグの保存ゼロ)
 
 ### 非目標（Phase 1 ではやらない)
 - サブエージェント（sidechain)転写の解析（`agent_type` の記録のみ行う)
@@ -43,8 +45,14 @@ Claude Code スキルの改善ループを回すための「摩擦（friction）
 4. **書き込み権の一方向性**:
    - フック → `data/` のみ
    - evaluator → `issues.jsonl` と `ledger.jsonl` のみ
+   - `resolutions.jsonl` → 取り込み(スキル改訂)を行った人間または改訂セッションのみ
    - `taxonomy.yaml` / `aliases.yaml` → promote 経由の人間のみ
-5. **supersede, don't accumulate**: スキル改訂は既存記述の書き換え・削除であり、注意書きの追記は原則禁止。
+5. **状態を保存しない(導出ビュー)**: 「未対応 issue」「取り込み済み」「修正の検証結果」は
+   どこにもフラグとして保存しない。すべて読み取り時に 3 本の追記ログ
+   (invocations / issues / resolutions)から導出する(イベントソーシング: ログ=イベントストア、report=projection)。
+   - open issues = issues − resolutions
+   - verified / reopened = resolutions の skill_commit 境界と invocations の skill_content_hash の突合で判定
+6. **supersede, don't accumulate**: スキル改訂は既存記述の書き換え・削除であり、注意書きの追記は原則禁止。
    行数バジェットをフックで機械的に強制する。
 
 ---
@@ -81,6 +89,7 @@ friction-harness/
 ~/.claude/friction-data/<project-id>/
 ├── invocations.jsonl           # L1: スキル発動ログ（追記専用）
 ├── issues.jsonl                # L2: 抽出された摩擦（追記専用・不変）
+├── resolutions.jsonl           # 取り込み記録（追記専用・不変。人間/改訂セッションのみ書き込み可）
 └── ledger.jsonl                # 処理カーソル台帳（追記専用、session_id ごとに最終行が有効）
 ```
 
@@ -109,12 +118,15 @@ CLAUDE.md 追記文（全スキル共通・これ 1 行のみ。スキル本文�
 ### invocations.jsonl（フックが追記)
 ```json
 {"ts":"2026-07-08T10:30:00Z","session_id":"<uuid>","tool_use_id":"toolu_xx | null",
- "skill_slug":"aidlc-planning","input_hash":"sha256:<hex>","agent_type":"main",
- "project_id":"a1b2c3d4e5f6"}
+ "skill_slug":"aidlc-planning","input_hash":"sha256:<hex>",
+ "skill_content_hash":"sha256:<発動時点の SKILL.md の SHA-256>",
+ "agent_type":"main","project_id":"a1b2c3d4e5f6"}
 ```
 - `tool_use_id` はフック stdin から取得するが、**null / 欠落する既知バグがある**
   （anthropics/claude-code issue #13241)。そのため `input_hash`（tool_input の正規化 JSON の SHA-256)を常に持たせる。
 - null の場合の解決は evaluate.ts 側で行う: 転写内で tool 名と input が一致する直近の tool_use ブロックを探す。
+- `skill_content_hash` は発動時点の SKILL.md 内容ハッシュ。issue が「どの版のスキルに対するものか」を
+  読み取り時に判定するための鍵であり、修正の verified / reopened 判定(§5.6)に使う。
 
 ### issues.jsonl（evaluator が追記・不変)
 ```json
@@ -126,6 +138,18 @@ CLAUDE.md 追記文（全スキル共通・これ 1 行のみ。スキル本文�
 ```
 - `issue_type` が `other` のときのみ `issue_type_candidate` に slug 形式の候補を入れる。
 - 冪等キーは `(session_id, offset_range)`。同一キーの再抽出結果は書き込まない。
+
+### resolutions.jsonl(取り込み台帳。人間 or 改訂セッションが追記・不変)
+```json
+{"id":"res-<ulid>","group_key":"aidlc-planning/ambiguous-instruction",
+ "issue_ids":["iss-...","iss-..."],"action":"supersede | split | wontfix",
+ "skill_commit":"<改訂コミット hash>",
+ "skill_content_hash_after":"sha256:<改訂後 SKILL.md の SHA-256>",
+ "note":"<改訂の要旨>","resolved_at":"..."}
+```
+- `group_key` は alias 解決済みの `skill_slug/正規 issue_type`。
+- issues.jsonl に status を書き込むことは禁止。open issue は読み取り時に issues − resolutions で導出する。
+- `action: wontfix` は「スキル欠陥ではなくエージェント側の誤読等」と判断したケースの記録用。
 
 ### ledger.jsonl（カーソル台帳)
 ```json
@@ -163,7 +187,8 @@ types:
 ### 5.1 hooks/log-skill-use.sh（レイヤー1)
 - 登録: PostToolUse、matcher は Skill ツール（スキル発動)のみ。
 - stdin JSON から `session_id, tool_use_id, tool_input, agent_type, cwd` を抽出。
-- `tool_input` からスキル slug を取り出し、invocations.jsonl に 1 行追記。
+- `tool_input` からスキル slug を取り出し、対応する SKILL.md の SHA-256 を計算して
+  `skill_content_hash` に含め、invocations.jsonl に 1 行追記。
 - project-id 解決は cwd 基準。git サブプロセスは 1 回に抑える（結果を env/tmp にキャッシュ可)。
 - **必ず exit 0**（記録失敗でセッションを止めない)。処理は数十 ms に収める。
 
@@ -213,12 +238,31 @@ types:
 - 出力: issue_type × skill_slug のクロス集計、other 率、candidate 上位、
   「issue close 時にスキル行数が増えていないか」の健全性チェック（git log と突合できれば尚可)。
 - invocations.jsonl と join し「発動あり・issue ゼロ」の分母(健全率)も出す。
+- **導出ビュー(状態はここでのみ計算する)**:
+  - open issues = alias 解決済み issues のうち、resolutions の issue_ids に含まれないもの。
+    グループ単位で件数を出し、取り込み閾値(同一 group_key 3 件以上、または severity: high 1 件)を
+    超えたグループを「改訂候補」として出力する
+  - 修正検証: resolution 後、`skill_content_hash_after` の版で発動した invocations を分母に、
+    同一 group_key の新規 issue を突合。N 回(初期値 5)発動して再発ゼロ → **verified**、
+    再発あり → **reopened** として出力。issue グループのライフサイクルは
+    reported → acknowledged(候補入り) → resolved(claimed) → verified / reopened
 
 ### 5.7 scripts/promote.ts
 - `other` の candidate が 5 件以上のクラスタを LLM に提案させる(クラスタリング自体も LLM で可。
   ただし**提案止まり**とし、taxonomy.yaml / aliases.yaml への反映は人間が手動で行う)。
 - 昇格基準: 出現数 ≥ 5 かつ既存 type にマップ不能。
 - 統合・廃止も同機構: 旧 type を `status: superseded` にし、aliases に写像を追加。
+
+### 5.8 スキルへの取り込みフロー(蒸留後・グループ単位)
+1. report.ts の「改訂候補」グループ(閾値超過)を確認する。**生 issue 単発からの直接改訂は禁止**
+   (単発の issue はエージェントの主張であり、誤読か仕様欠陥か未確定のため)。
+2. グループ内の issue の detail と anchor_uuid から転写原文を確認し、スキル欠陥と判断したら
+   SKILL.md を改訂(§2 の supersede 原則。行数バジェットはフックが強制)。
+   エージェント側の問題なら `action: wontfix` で記録する。
+3. 改訂コミット後、resolutions.jsonl に 1 行追記(group_key, issue_ids, skill_commit,
+   skill_content_hash_after)。
+4. 以降の検証は自動: report.ts が新ハッシュでの発動と再発を突合し verified / reopened を導出する。
+   reopened になったグループは再び改訂候補に戻る。
 
 ---
 
