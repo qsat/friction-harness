@@ -63,11 +63,17 @@ Claude Code スキルの改善ループを回すための「摩擦（friction）
 
 ファイルは**実行グループ単位のディレクトリ**に分け、ディレクトリ名に**処理連番を prefix**する
 （`ls` の並び順 = パイプラインの処理順になる）。連番は 10 刻みとし、将来のグループ挿入余地を残す。
-連番なしのディレクトリ（`lib/`, `taxonomy/`）は実行グループではない共有資材で、番号付きグループの後に並ぶ。
+連番なしのディレクトリは「実行グループではないもの」であり、2 種類ある:
+- **plugin 規約の予約ディレクトリ**（`.claude-plugin/`, `hooks/`。Phase 2 でそのまま plugin として配布するための器）
+- **共有資材**（`lib/`, `taxonomy/`。全グループから参照される）
 
 ```
 friction-harness/
-├── 10-collect/                 # 収集（L1）: フック群。パイプラインの入口
+├── .claude-plugin/
+│   └── plugin.json             # plugin マニフェスト（name/version/description）。Phase 2 で有効化
+├── hooks/
+│   └── hooks.json              # フック定義: イベント → ${CLAUDE_PLUGIN_ROOT}/10-collect/*.sh の写像のみ
+├── 10-collect/                 # 収集（L1）: フック実体。パイプラインの入口
 │   ├── log-skill-use.sh        #   スキル発動記録（PostToolUse, matcher: Skill）
 │   ├── guard-skill-size.sh     #   SKILL.md 行数バジェット強制（PostToolUse, matcher: Edit|Write）
 │   └── trigger-evaluate.sh     #   SessionEnd: evaluate をバックグラウンド起動して即 exit 0
@@ -87,6 +93,19 @@ friction-harness/
 │   └── aliases.yaml            # candidate/旧type → 正規 type の写像（git 管理）
 └── package.json                # bun 用。依存は最小限（yaml パーサ程度）
 ```
+
+plugin 規約との整合（Phase 2 を見据えた役割分離）:
+- **フックの実体スクリプトは実行グループ `10-collect/` に置き、plugin 予約の `hooks/hooks.json` は
+  「イベント → スクリプトパスの写像」だけを持つ**。コードの所在は処理順（連番）、Claude Code への登録は
+  plugin 規約、と関心を分離する。hooks.json 内のパスは `${CLAUDE_PLUGIN_ROOT}` 変数で plugin ルート相対に
+  書けるため、連番ディレクトリ構成のまま plugin 化できる（予約名は `.claude-plugin/`, `hooks/`,
+  `commands/`, `agents/`, `skills/` のみで、連番ディレクトリとは衝突しない）。
+- `hooks/hooks.json` は Phase 1 から git 管理する（内容は §6 参照）。Phase 1 の `.claude/settings.json`
+  登録はこれと同内容の絶対パス版であり、**二重管理になるため変更時は必ず両方を更新**する。
+- Phase 2 で `/friction-report` 等のスラッシュコマンドを提供する場合は予約ディレクトリ `commands/` を
+  追加し、30-report / 40-promote の薄いラッパーとする（実装は連番グループ側に置いたまま）。
+- plugin.json のフィールド詳細・hooks.json の正確なスキーマは Phase 2 着手時に実機の plugin
+  ドキュメントで再確認する（§6 の実測確認と同じ扱い）。
 
 補足: §5.8 の取り込み（resolutions 追記）は人間/改訂セッションの手動フローであり実行グループを持たない。
 将来スクリプト化する場合は `50-resolve/` を予約する。
@@ -274,9 +293,9 @@ types:
 
 ---
 
-## 6. settings.json 登録例（Phase 1)
+## 6. フック登録（Phase 1: settings.json / Phase 2: plugin hooks.json)
 
-対象リポジトリの `.claude/settings.json`:
+Phase 1 は対象リポジトリの `.claude/settings.json` に絶対パスで登録する:
 ```json
 {
   "hooks": {
@@ -292,7 +311,27 @@ types:
   }
 }
 ```
-※ Skill 発動時のツール名・stdin スキーマは実装時に実機で 1 セッション分の転写と hook 入力をダンプして確認すること（バージョンにより差異がある)。ここが本仕様で唯一の未検証ポイント。
+Phase 2（plugin 配布時)は同内容を `hooks/hooks.json` が担い、settings.json 登録は不要になる。
+パスは `${CLAUDE_PLUGIN_ROOT}` で plugin ルート相対に解決する:
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {"matcher": "Skill",
+       "hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/log-skill-use.sh"}]},
+      {"matcher": "Edit|Write",
+       "hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/guard-skill-size.sh"}]}
+    ],
+    "SessionEnd": [
+      {"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/trigger-evaluate.sh"}]}
+    ]
+  }
+}
+```
+`hooks/hooks.json` は Phase 1 から git 管理し、settings.json とはパス形式（絶対 / plugin 相対)以外を
+常に一致させる（§3 の二重管理注意)。
+
+※ Skill 発動時のツール名・stdin スキーマは実装時に実機で 1 セッション分の転写と hook 入力をダンプして確認すること（バージョンにより差異がある)。hooks.json / plugin.json の正確なスキーマも Phase 2 着手時に同様に実機確認する。ここが本仕様の未検証ポイント。
 
 ---
 
