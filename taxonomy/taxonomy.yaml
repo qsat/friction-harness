@@ -1,0 +1,12 @@
+# 分類語彙（spec §4）。変更は promote 経由の人間のみ（spec §2-4）。
+# 運用ルール: enum 上限 10。status は provisional → established → superseded。
+version: v0
+types:
+  - {slug: ambiguous-instruction,   status: provisional, since: v0, description: 複数解釈が可能でエージェントが推測で埋めた}
+  - {slug: missing-instruction,     status: provisional, since: v0, description: 必要な手順・判断基準がスキルに存在しない}
+  - {slug: conflicting-instruction, status: provisional, since: v0, description: 他スキル/CLAUDE.md/ルールと矛盾}
+  - {slug: outdated-content,        status: provisional, since: v0, description: コードベースや方針の現状と乖離}
+  - {slug: wrong-granularity,       status: provisional, since: v0, description: 手順が細かすぎ/粗すぎて実態に合わない}
+  - {slug: trigger-mismatch,        status: provisional, since: v0, description: 発動すべき場面で発動しない、または誤発動}
+  - {slug: execution-friction,      status: provisional, since: v0, description: 指示は正しいが環境・ツール側で失敗}
+  - {slug: other,                   status: established, since: v0, description: candidate 行き}

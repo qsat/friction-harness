@@ -1,0 +1,5 @@
+# from（candidate 文字列 or superseded type） → to（正規 type）の写像（spec §4）。
+# 変更は promote の提案を人間がレビューして手動反映する（spec §2-4）。
+# 例:
+# - {from: unclear-phase-boundary, to: ambiguous-instruction, added: 2026-07-08}
+[]
