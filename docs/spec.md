@@ -74,11 +74,11 @@ friction-harness/
 ├── .claude-plugin/
 │   └── plugin.json             # plugin マニフェスト（name/version/description）。Phase 2 で有効化
 ├── hooks/
-│   └── hooks.json              # フック定義: イベント → ${CLAUDE_PLUGIN_ROOT}/10-collect/*.sh の写像のみ
+│   └── hooks.json              # フック定義: イベント → ${CLAUDE_PLUGIN_ROOT}/10-collect/*.ts の写像のみ
 ├── 10-collect/                 # 収集（L1）: フック実体。パイプラインの入口
-│   ├── log-skill-use.sh        #   スキル発動記録（PostToolUse, matcher: Skill）
-│   ├── guard-skill-size.sh     #   SKILL.md 行数バジェット強制（PostToolUse, matcher: Edit|Write）
-│   └── trigger-evaluate.sh     #   SessionEnd: evaluate をバックグラウンド起動して即 exit 0
+│   ├── log-skill-use.ts        #   スキル発動記録（PostToolUse, matcher: Skill）
+│   ├── guard-skill-size.ts     #   SKILL.md 行数バジェット強制（PostToolUse, matcher: Edit|Write）
+│   └── trigger-evaluate.ts     #   SessionEnd: evaluate をバックグラウンド起動して即 exit 0
 ├── 20-evaluate/                # 抽出（L2）: 突合バッチ
 │   ├── evaluate.ts             #   突合バッチ本体
 │   └── evaluator.md            #   抽出プロンプト（taxonomy を埋め込んで動的生成する）
@@ -93,8 +93,14 @@ friction-harness/
 ├── taxonomy/
 │   ├── taxonomy.yaml           # 分類語彙（git 管理・グローバル）
 │   └── aliases.yaml            # candidate/旧type → 正規 type の写像（git 管理）
+├── tests/                      # bun test（フックは実プロセス起動、LLM は偽 claude でモック）
 └── package.json                # bun 用。依存は最小限（yaml パーサ程度）
 ```
+
+言語は **TypeScript（Bun）に統一**する。フックも shell ではなく TS
+（shebang `#!/usr/bin/env bun` + 実行権限。bun が PATH にあることが前提）。
+これにより input_hash 等のロジックが lib/ の単一実装に集約され、shell/TS の二重実装を排除できる。
+フックのレイテンシは実測 ~95ms（bun 起動 + git サブプロセス 1 回込み）。
 
 plugin 規約との整合（Phase 2 を見据えた役割分離）:
 - **フックの実体スクリプトは実行グループ `10-collect/` に置き、plugin 予約の `hooks/hooks.json` は
@@ -137,7 +143,7 @@ plugin 規約との整合（Phase 2 を見据えた役割分離）:
         └── references/         # 詳細手順・エッジケース（バジェット対象外）
 ```
 
-friction-skills.yaml の形式（ブロックリスト形式のみサポート。フロー形式 `[a, b]` は不可）:
+friction-skills.yaml の形式（YAML として解釈する。`skills: [a, b]` のフロー形式も可）:
 ```yaml
 skills:
   - aidlc-planning
@@ -228,7 +234,7 @@ types:
 
 ## 5. コンポーネント仕様
 
-### 5.1 10-collect/log-skill-use.sh（レイヤー1)
+### 5.1 10-collect/log-skill-use.ts（レイヤー1)
 - 登録: PostToolUse、matcher は Skill ツール（スキル発動)のみ。
 - stdin JSON から `session_id, tool_use_id, tool_input, transcript_path, cwd` を抽出（実測スキーマは §6）。
 - **allowlist フィルタ**: `<cwd>/.claude/friction-skills.yaml` に slug が列挙されている場合のみ記録。
@@ -236,17 +242,19 @@ types:
 - `tool_input.skill` からスキル slug を取り出し、対応する SKILL.md の SHA-256 を計算して
   `skill_content_hash` に含め、invocations.jsonl に 1 行追記（SKILL.md が見つからない場合は null）。
 - project-id 解決は cwd 基準。git サブプロセスは 1 回に抑える（結果を env/tmp にキャッシュ可)。
-- **必ず exit 0**（記録失敗でセッションを止めない)。処理は数十 ms に収める。
+- **必ず exit 0**（記録失敗でセッションを止めない)。処理は 100ms 程度に収める（TS 化後の実測 ~95ms）。
 
-### 5.2 10-collect/guard-skill-size.sh
+### 5.2 10-collect/guard-skill-size.ts
 - 登録: PostToolUse、matcher: `Edit|Write`。
-- `tool_input.file_path` が `**/skills/*/SKILL.md` にマッチする場合のみ `wc -l` チェック。
+- `tool_input.file_path` が `**/skills/*/SKILL.md` にマッチする場合のみ行数チェック。
 - 500 行超過: exit 2 + stderr で「行数バジェット超過。追記ではなく references/ への切り出しまたは既存記述の書き換え（supersede)を行うこと」を返す。
 - 200〜500 行: 非ブロックの警告（stderr、exit 0)。
 
-### 5.3 10-collect/trigger-evaluate.sh
+### 5.3 10-collect/trigger-evaluate.ts
 - 登録: SessionEnd。
-- `nohup bun <harness>/20-evaluate/evaluate.ts --session <session_id> &` を投げて**即 exit 0**。
+- `bun <harness>/20-evaluate/evaluate.ts --session <session_id>` を detached サブプロセスで
+  起動（unref）して**即 exit 0**（実測 ~15ms）。evaluate はセッションの cwd で起動する
+  （project-id 解決のため）。
 - フックのタイムアウトに掛からないこと。落ちても次のスキャンで拾われるため信頼性は不要。
 
 ### 5.4 20-evaluate/evaluate.ts（レイヤー2・中核)
@@ -320,12 +328,12 @@ Phase 1 は対象リポジトリの `.claude/settings.json` に絶対パスで�
   "hooks": {
     "PostToolUse": [
       {"matcher": "Skill",
-       "hooks": [{"type": "command", "command": "/abs/path/friction-harness/10-collect/log-skill-use.sh"}]},
+       "hooks": [{"type": "command", "command": "/abs/path/friction-harness/10-collect/log-skill-use.ts"}]},
       {"matcher": "Edit|Write",
-       "hooks": [{"type": "command", "command": "/abs/path/friction-harness/10-collect/guard-skill-size.sh"}]}
+       "hooks": [{"type": "command", "command": "/abs/path/friction-harness/10-collect/guard-skill-size.ts"}]}
     ],
     "SessionEnd": [
-      {"hooks": [{"type": "command", "command": "/abs/path/friction-harness/10-collect/trigger-evaluate.sh"}]}
+      {"hooks": [{"type": "command", "command": "/abs/path/friction-harness/10-collect/trigger-evaluate.ts"}]}
     ]
   }
 }
@@ -337,12 +345,12 @@ Phase 2（plugin 配布時)は同内容を `hooks/hooks.json` が担い、settin
   "hooks": {
     "PostToolUse": [
       {"matcher": "Skill",
-       "hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/log-skill-use.sh"}]},
+       "hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/log-skill-use.ts"}]},
       {"matcher": "Edit|Write",
-       "hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/guard-skill-size.sh"}]}
+       "hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/guard-skill-size.ts"}]}
     ],
     "SessionEnd": [
-      {"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/trigger-evaluate.sh"}]}
+      {"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/trigger-evaluate.ts"}]}
     ]
   }
 }
@@ -394,10 +402,10 @@ Phase 2（plugin 配布時)は同内容を `hooks/hooks.json` が担い、settin
 
 1. **観測の確認**: ダミーフック(stdin を tmp にダンプするだけ)を Skill / Edit に張り、
    実際の stdin JSON と転写 JSONL の構造を確認。tool_use_id の有無をここで実測する
-2. lib/(project-id, transcript, ledger)+ log-skill-use.sh → invocations が溜まることを確認
+2. lib/(project-id, transcript, ledger)+ log-skill-use.ts → invocations が溜まることを確認
 3. evaluate.ts をアンカー解決まで(LLM なし)実装し、マーカー入り転写が正しく出ることを確認
 4. evaluator.md + LLM 呼び出しを接続、issues.jsonl まで通す
-5. report.ts / guard-skill-size.sh / trigger-evaluate.sh
+5. report.ts / guard-skill-size.ts / trigger-evaluate.ts
 6. promote.ts(candidate が実際に溜まってからで良い)
 
 ## 8. 既知の落とし穴(再掲)

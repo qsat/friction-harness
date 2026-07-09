@@ -21,6 +21,7 @@ function argValue(name: string): string | null {
 }
 const pid = argValue("--project-id") ?? projectId(process.cwd());
 const dataDir = argValue("--data-dir") ?? join(homedir(), ".claude", "friction-data", pid);
+const taxonomyDir = argValue("--taxonomy-dir") ?? join(HARNESS_ROOT, "taxonomy");
 const asJson = args.includes("--json");
 
 interface Invocation {
@@ -63,7 +64,7 @@ function readJsonl<T>(path: string): T[] {
 
 /** aliases.yaml を読み、from → to の写像（推移閉包）を返す */
 function loadAliases(): Map<string, string> {
-  const path = join(HARNESS_ROOT, "taxonomy", "aliases.yaml");
+  const path = join(taxonomyDir, "aliases.yaml");
   const raw = existsSync(path) ? parseYaml(readFileSync(path, "utf8")) : [];
   const map = new Map<string, string>();
   if (Array.isArray(raw)) {
@@ -115,7 +116,7 @@ for (const i of issues) {
 // alias で正規 type に解決済みの candidate は other に数えない。
 // candidate のまま（未昇格 = taxonomy に無い type）のものは other 扱いで数える。
 const taxonomyTypes = new Set<string>(
-  (parseYaml(readFileSync(join(HARNESS_ROOT, "taxonomy", "taxonomy.yaml"), "utf8")).types as { slug: string }[]).map(
+  (parseYaml(readFileSync(join(taxonomyDir, "taxonomy.yaml"), "utf8")).types as { slug: string }[]).map(
     (t) => t.slug,
   ),
 );

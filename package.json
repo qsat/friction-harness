@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Friction collection & distillation harness for Claude Code skills",
+  "scripts": {
+    "test": "bun test"
+  },
   "dependencies": {
     "yaml": "^2.6.0"
   }

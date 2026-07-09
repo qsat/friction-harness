@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/log-skill-use.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/log-skill-use.ts"
           }
         ]
       },
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/guard-skill-size.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/guard-skill-size.ts"
           }
         ]
       }
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/trigger-evaluate.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/10-collect/trigger-evaluate.ts"
           }
         ]
       }

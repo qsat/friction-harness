@@ -74,7 +74,7 @@ export function toolUseBlocks(lines: TranscriptLine[]): ToolUseBlock[] {
 /**
  * tool_input の正規化 JSON の SHA-256（"sha256:<hex>" 形式）。
  * 正規化 = キーを再帰的にソートした compact JSON。
- * 10-collect/log-skill-use.sh の `jq -cS` + sha256sum と同一結果になること。
+ * 記録側（10-collect/log-skill-use.ts）と解決側（evaluate）の両方がこの関数を使う。
  */
 export function inputHash(input: unknown): string {
   const canon = canonicalJson(input);

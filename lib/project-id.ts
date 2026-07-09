@@ -5,7 +5,6 @@ import { resolve } from "node:path";
 /**
  * プロジェクト ID: git remote origin URL の SHA-256 先頭12桁。
  * remote がない場合は cwd 絶対パスのハッシュにフォールバック（spec §3）。
- * 10-collect/log-skill-use.sh のシェル実装と同一の規則を保つこと。
  */
 export function projectId(cwd: string): string {
   let source: string;
