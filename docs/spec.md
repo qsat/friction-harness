@@ -57,6 +57,19 @@ Claude Code スキルの改善ループを回すための「摩擦（friction）
 6. **supersede, don't accumulate**: スキル改訂は既存記述の書き換え・削除であり、注意書きの追記は原則禁止。
    行数バジェットをフックで機械的に強制する。
 
+### JSONL ログ一覧（用途・作成者・利用者）
+
+すべて追記専用。置き場所は `~/.claude/friction-data/<project-id>/`（§3）、スキーマの詳細は §4。
+「作成者」列は §2-4 書き込み権の一方向性をファイル単位で言い直したものであり、ここに載っていない
+書き込みはすべて禁止。
+
+| ファイル | 用途 | 作成者（書き込み） | 利用者（読み取り） |
+|---|---|---|---|
+| `invocations.jsonl` | L1: スキル発動ログ（allowlist 対象のみ） | `10-collect/log-skill-use.ts`（フック） | `20-evaluate`（アンカー解決）、`30-report`（健全率・修正検証の分母） |
+| `issues.jsonl` | L2: 抽出された摩擦（不変） | `20-evaluate/evaluate.ts`（evaluator） | `30-report`（集計・状態導出）、`40-promote`（candidate 集計）、人間（§5.8 取り込み時の原文確認） |
+| `resolutions.jsonl` | スキル改訂の取り込み台帳（不変） | 人間または改訂セッション（§5.8。ツールは書かない） | `30-report`（open / verified / reopened の導出） |
+| `ledger.jsonl` | 処理カーソル台帳（session_id ごと最終行が有効） | `20-evaluate/evaluate.ts` | `20-evaluate/evaluate.ts`（差分スキャンの基準） |
+
 ---
 
 ## 3. ディレクトリ構成
@@ -302,8 +315,16 @@ types:
     reported → acknowledged(候補入り) → resolved(claimed) → verified / reopened
 
 ### 5.7 40-promote/promote.ts
-- `other` の candidate が 5 件以上のクラスタを LLM に提案させる(クラスタリング自体も LLM で可。
-  ただし**提案止まり**とし、taxonomy.yaml / aliases.yaml への反映は人間が手動で行う)。
+- `other` の candidate が 5 件以上（`--min-count` で変更可）のクラスタを LLM に提案させる
+  (クラスタリング自体も LLM で可。プロンプトは `40-promote/promoter.md`。
+  ただし**提案止まり**とし、taxonomy.yaml / aliases.yaml への反映は人間が手動で行う。
+  このスクリプトはいかなるファイルも書き換えない)。
+- 集計時に aliases を適用し、既に正規 type へ解決される candidate は昇格対象から除外する。
+  閾値未満なら LLM を呼ばず現状の candidate 分布のみ報告する。
+- 提案は 2 アクション: `promote`（新 type。slug/description/merge_from）と
+  `alias`（既存 type への統合。to/merge_from）。LLM 出力はバリデーションし、
+  既存 slug との衝突・不正 slug・candidate 集合外の merge_from は破棄してログに残す。
+- 出力は人間レビュー用の taxonomy.yaml / aliases.yaml **追記スニペット**（`--json` で機械可読）。
 - 昇格基準: 出現数 ≥ 5 かつ既存 type にマップ不能。
 - 統合・廃止も同機構: 旧 type を `status: superseded` にし、aliases に写像を追加。
 
