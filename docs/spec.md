@@ -61,27 +61,35 @@ Claude Code スキルの改善ループを回すための「摩擦（friction）
 
 ### ハーネス本体（独立リポジトリ。将来の plugin ルート)
 
+ファイルは**実行グループ単位のディレクトリ**に分け、ディレクトリ名に**処理連番を prefix**する
+（`ls` の並び順 = パイプラインの処理順になる）。連番は 10 刻みとし、将来のグループ挿入余地を残す。
+連番なしのディレクトリ（`lib/`, `taxonomy/`）は実行グループではない共有資材で、番号付きグループの後に並ぶ。
+
 ```
 friction-harness/
-├── hooks/
-│   ├── log-skill-use.sh        # L1: スキル発動記録（PostToolUse, matcher: Skill）
-│   ├── guard-skill-size.sh     # SKILL.md 行数バジェット強制（PostToolUse, matcher: Edit|Write）
-│   └── trigger-evaluate.sh     # SessionEnd: evaluate をバックグラウンド起動して即 exit 0
-├── prompts/
-│   └── evaluator.md            # 抽出プロンプト（taxonomy を埋め込んで動的生成する）
-├── scripts/
-│   ├── lib/
-│   │   ├── project-id.ts       # git remote URL → 12桁ハッシュ（マシン間で安定）
-│   │   ├── transcript.ts       # 転写 JSONL のパースとアンカー解決
-│   │   └── ledger.ts           # カーソル台帳の読み書き
-│   ├── evaluate.ts             # L2: 突合バッチ本体
-│   ├── report.ts               # 集計（alias 解決はここでのみ）
-│   └── promote.ts              # candidate クラスタリング → 昇格提案
+├── 10-collect/                 # 収集（L1）: フック群。パイプラインの入口
+│   ├── log-skill-use.sh        #   スキル発動記録（PostToolUse, matcher: Skill）
+│   ├── guard-skill-size.sh     #   SKILL.md 行数バジェット強制（PostToolUse, matcher: Edit|Write）
+│   └── trigger-evaluate.sh     #   SessionEnd: evaluate をバックグラウンド起動して即 exit 0
+├── 20-evaluate/                # 抽出（L2）: 突合バッチ
+│   ├── evaluate.ts             #   突合バッチ本体
+│   └── evaluator.md            #   抽出プロンプト（taxonomy を埋め込んで動的生成する）
+├── 30-report/                  # 集計・導出ビュー
+│   └── report.ts               #   集計（alias 解決・状態導出はここでのみ）
+├── 40-promote/                 # taxonomy 進化の提案
+│   └── promote.ts              #   candidate クラスタリング → 昇格提案
+├── lib/                        # 共有ライブラリ（全グループから参照。実行グループではない）
+│   ├── project-id.ts           #   git remote URL → 12桁ハッシュ（マシン間で安定）
+│   ├── transcript.ts           #   転写 JSONL のパースとアンカー解決
+│   └── ledger.ts               #   カーソル台帳の読み書き
 ├── taxonomy/
 │   ├── taxonomy.yaml           # 分類語彙（git 管理・グローバル）
 │   └── aliases.yaml            # candidate/旧type → 正規 type の写像（git 管理）
 └── package.json                # bun 用。依存は最小限（yaml パーサ程度）
 ```
+
+補足: §5.8 の取り込み（resolutions 追記）は人間/改訂セッションの手動フローであり実行グループを持たない。
+将来スクリプト化する場合は `50-resolve/` を予約する。
 
 ### 可変データ（plugin 外・.gitignore 相当。配布物に含めない)
 
@@ -184,7 +192,7 @@ types:
 
 ## 5. コンポーネント仕様
 
-### 5.1 hooks/log-skill-use.sh（レイヤー1)
+### 5.1 10-collect/log-skill-use.sh（レイヤー1)
 - 登録: PostToolUse、matcher は Skill ツール（スキル発動)のみ。
 - stdin JSON から `session_id, tool_use_id, tool_input, agent_type, cwd` を抽出。
 - `tool_input` からスキル slug を取り出し、対応する SKILL.md の SHA-256 を計算して
@@ -192,18 +200,18 @@ types:
 - project-id 解決は cwd 基準。git サブプロセスは 1 回に抑える（結果を env/tmp にキャッシュ可)。
 - **必ず exit 0**（記録失敗でセッションを止めない)。処理は数十 ms に収める。
 
-### 5.2 hooks/guard-skill-size.sh
+### 5.2 10-collect/guard-skill-size.sh
 - 登録: PostToolUse、matcher: `Edit|Write`。
 - `tool_input.file_path` が `**/skills/*/SKILL.md` にマッチする場合のみ `wc -l` チェック。
 - 500 行超過: exit 2 + stderr で「行数バジェット超過。追記ではなく references/ への切り出しまたは既存記述の書き換え（supersede)を行うこと」を返す。
 - 200〜500 行: 非ブロックの警告（stderr、exit 0)。
 
-### 5.3 hooks/trigger-evaluate.sh
+### 5.3 10-collect/trigger-evaluate.sh
 - 登録: SessionEnd。
-- `nohup bun <harness>/scripts/evaluate.ts --session <session_id> &` を投げて**即 exit 0**。
+- `nohup bun <harness>/20-evaluate/evaluate.ts --session <session_id> &` を投げて**即 exit 0**。
 - フックのタイムアウトに掛からないこと。落ちても次のスキャンで拾われるため信頼性は不要。
 
-### 5.4 scripts/evaluate.ts（レイヤー2・中核)
+### 5.4 20-evaluate/evaluate.ts（レイヤー2・中核)
 処理フロー:
 1. `~/.claude/projects/<project-slug>/*.jsonl` をスキャン（`--session` 指定時はそのファイルのみ)。
 2. ledger と突合し、未処理範囲（カーソル以降の行)を持つ転写を列挙。
@@ -224,7 +232,7 @@ types:
 - スキル発動ゼロの範囲は LLM を呼ばずスキップ（コスト最適化)。
 - CLAUDE.md の摩擦明示ルールにより転写に残った `[skill-friction]` 発言は最優先の抽出対象。
 
-### 5.5 prompts/evaluator.md
+### 5.5 20-evaluate/evaluator.md
 - taxonomy.yaml の type 一覧（slug + description)をテンプレート展開して埋め込む。
 - 指示の骨子:
   1. まず既存 enum への分類を試みる。適合度が低い場合のみ `other` + `issue_type_candidate`（slug 形式)
@@ -233,7 +241,7 @@ types:
   4. detail にコード断片・機密を含めない。パターンの記述のみ
   5. 出力は JSON 配列のみ
 
-### 5.6 scripts/report.ts
+### 5.6 30-report/report.ts
 - issues.jsonl を読み、`aliases.yaml` を適用（from → to の写像。superseded type も同様に解決)してから集計。
 - 出力: issue_type × skill_slug のクロス集計、other 率、candidate 上位、
   「issue close 時にスキル行数が増えていないか」の健全性チェック（git log と突合できれば尚可)。
@@ -247,7 +255,7 @@ types:
     再発あり → **reopened** として出力。issue グループのライフサイクルは
     reported → acknowledged(候補入り) → resolved(claimed) → verified / reopened
 
-### 5.7 scripts/promote.ts
+### 5.7 40-promote/promote.ts
 - `other` の candidate が 5 件以上のクラスタを LLM に提案させる(クラスタリング自体も LLM で可。
   ただし**提案止まり**とし、taxonomy.yaml / aliases.yaml への反映は人間が手動で行う)。
 - 昇格基準: 出現数 ≥ 5 かつ既存 type にマップ不能。
@@ -274,12 +282,12 @@ types:
   "hooks": {
     "PostToolUse": [
       {"matcher": "Skill",
-       "hooks": [{"type": "command", "command": "/abs/path/friction-harness/hooks/log-skill-use.sh"}]},
+       "hooks": [{"type": "command", "command": "/abs/path/friction-harness/10-collect/log-skill-use.sh"}]},
       {"matcher": "Edit|Write",
-       "hooks": [{"type": "command", "command": "/abs/path/friction-harness/hooks/guard-skill-size.sh"}]}
+       "hooks": [{"type": "command", "command": "/abs/path/friction-harness/10-collect/guard-skill-size.sh"}]}
     ],
     "SessionEnd": [
-      {"hooks": [{"type": "command", "command": "/abs/path/friction-harness/hooks/trigger-evaluate.sh"}]}
+      {"hooks": [{"type": "command", "command": "/abs/path/friction-harness/10-collect/trigger-evaluate.sh"}]}
     ]
   }
 }
