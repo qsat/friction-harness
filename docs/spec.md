@@ -26,7 +26,7 @@ Claude Code スキルの改善ループを回すための「摩擦（friction）
    ログのみから導出できる(状態フラグの保存ゼロ)
 
 ### 非目標（Phase 1 ではやらない)
-- サブエージェント（sidechain)転写の解析（`agent_type` の記録のみ行う)
+- サブエージェント（sidechain)転写の解析（種別は evaluate 時に転写行の `isSidechain` から導出するのみ)
 - SQLite 化（ファイルベースで開始。alias 解決を跨いだ集計が重くなったら移行)
 - taxonomy/aliases の自動コミット（昇格は人間レビュー必須)
 - plugin としての配布（Phase 2)
@@ -147,11 +147,16 @@ CLAUDE.md 追記文（全スキル共通・これ 1 行のみ。スキル本文�
 {"ts":"2026-07-08T10:30:00Z","session_id":"<uuid>","tool_use_id":"toolu_xx | null",
  "skill_slug":"aidlc-planning","input_hash":"sha256:<hex>",
  "skill_content_hash":"sha256:<発動時点の SKILL.md の SHA-256>",
- "agent_type":"main","project_id":"a1b2c3d4e5f6"}
+ "transcript_path":"/root/.claude/projects/<project-slug>/<session>.jsonl",
+ "project_id":"a1b2c3d4e5f6"}
 ```
 - `tool_use_id` はフック stdin から取得するが、**null / 欠落する既知バグがある**
   （anthropics/claude-code issue #13241)。そのため `input_hash`（tool_input の正規化 JSON の SHA-256)を常に持たせる。
 - null の場合の解決は evaluate.ts 側で行う: 転写内で tool 名と input が一致する直近の tool_use ブロックを探す。
+- `transcript_path` はフック stdin に含まれる（§6 実測結果）ため記録する。evaluate はこれを一次情報として
+  転写を特定し、projects ディレクトリのスキャンは取りこぼし回収用とする。
+- `agent_type` は当初フィールドとして予定していたが、**フック stdin に存在しないことが実測で判明**したため
+  invocations には持たせない。エージェント種別は evaluate 時にアンカー行の `isSidechain` から導出する。
 - `skill_content_hash` は発動時点の SKILL.md 内容ハッシュ。issue が「どの版のスキルに対するものか」を
   読み取り時に判定するための鍵であり、修正の verified / reopened 判定(§5.6)に使う。
 
@@ -213,7 +218,7 @@ types:
 
 ### 5.1 10-collect/log-skill-use.sh（レイヤー1)
 - 登録: PostToolUse、matcher は Skill ツール（スキル発動)のみ。
-- stdin JSON から `session_id, tool_use_id, tool_input, agent_type, cwd` を抽出。
+- stdin JSON から `session_id, tool_use_id, tool_input, transcript_path, cwd` を抽出（実測スキーマは §6）。
 - `tool_input` からスキル slug を取り出し、対応する SKILL.md の SHA-256 を計算して
   `skill_content_hash` に含め、invocations.jsonl に 1 行追記。
 - project-id 解決は cwd 基準。git サブプロセスは 1 回に抑える（結果を env/tmp にキャッシュ可)。
@@ -331,7 +336,43 @@ Phase 2（plugin 配布時)は同内容を `hooks/hooks.json` が担い、settin
 `hooks/hooks.json` は Phase 1 から git 管理し、settings.json とはパス形式（絶対 / plugin 相対)以外を
 常に一致させる（§3 の二重管理注意)。
 
-※ Skill 発動時のツール名・stdin スキーマは実装時に実機で 1 セッション分の転写と hook 入力をダンプして確認すること（バージョンにより差異がある)。hooks.json / plugin.json の正確なスキーマも Phase 2 着手時に同様に実機確認する。ここが本仕様の未検証ポイント。
+※ hooks.json / plugin.json の正確なスキーマは Phase 2 着手時に実機確認する。
+
+### 実測結果（2026-07-09, claude CLI 2.1.205, ヘッドレス `-p` セッションで実測）
+
+ダミーフック（stdin ダンプ）を PostToolUse(Skill / Edit|Write) と SessionEnd に張り、
+テストスキル発動 + Write 実行の 1 セッションで確認した事実:
+
+**PostToolUse (matcher: Skill) の stdin JSON**
+```json
+{"session_id":"<uuid>","transcript_path":"/root/.claude/projects/<project-slug>/<session>.jsonl",
+ "cwd":"...","prompt_id":"<uuid>","permission_mode":"default",
+ "hook_event_name":"PostToolUse","tool_name":"Skill",
+ "tool_input":{"skill":"echo-test"},
+ "tool_response":{"success":true,"commandName":"echo-test"},
+ "tool_use_id":"toolu_01J9M2Xe...","duration_ms":7}
+```
+- matcher `Skill` は機能する。`tool_name` は `"Skill"`、スキル slug は **`tool_input.skill`**。
+- **`tool_use_id` は今回の実測では存在した**（toolu_ 形式、転写内の tool_use ブロック id と一致）。
+  ただし issue #13241 の null ケースに備え input_hash フォールバックは維持する。
+- **`agent_type` フィールドは存在しない**（仕様の当初想定と相違）。エージェント種別は
+  転写行の `isSidechain` から evaluate 時に導出する（§4 の invocations スキーマ注記参照）。
+- **`transcript_path` が stdin に直接含まれる**。invocations.jsonl に記録し、evaluate の
+  転写探索を確実化する（project-slug の推測が不要になる）。
+
+**SessionEnd の stdin JSON**: `{session_id, transcript_path, cwd, prompt_id, hook_event_name, reason}`
+
+**転写 JSONL の構造**
+- 行 type: `queue-operation` / `user` / `attachment` / `ai-title` / `assistant` / `last-prompt`。
+  `uuid`/`parentUuid` 連鎖は user/attachment/assistant 行が持ち、attachment も連鎖に入る。
+  queue-operation / ai-title / last-prompt 行は uuid を持たない（パーサはスキップ可能に）。
+- 行の共通フィールド: `sessionId, timestamp, cwd, gitBranch, version, userType, entrypoint, isSidechain`。
+  user 行はさらに `promptId, permissionMode, promptSource`。
+- スキル発動は assistant 行の `message.content[]` 内 `{"type":"tool_use","id":"toolu_...","name":"Skill","input":{"skill":"<slug>"}}`
+  として現れ、**この assistant 行の `uuid` がアンカー**。直後の user 行に対応する `tool_result`
+  （`tool_use_id` で紐づく）、その後にスキル本文注入の attachment 行が続く。
+- 注意: 本実測はヘッドレス `-p` セッション。対話セッションでは行 type が増える可能性があるため、
+  パーサは未知 type を無視する方針とする。
 
 ---
 
@@ -350,5 +391,5 @@ Phase 2（plugin 配布時)は同内容を `hooks/hooks.json` が担い、settin
 - tool_use_id が hook 入力で null になるバグ → input_hash フォールバック必須
 - SessionEnd は強制終了・クラッシュで発火しない → プル型突合が正、フックは即時化トリガー
 - 転写の自動削除(約 30 日) → 抽出済みデータは自前ストアに残るので実質問題ないが、バッチ停止を放置しない
-- サブエージェント転写は sidechain 別記録 → Phase 1 は対象外、agent_type の記録のみ
+- サブエージェント転写は sidechain 別記録 → Phase 1 は対象外、`isSidechain` からの種別導出のみ
 - LLM 出力の冪等性は信用しない → 冪等キーとバリデーションで構造的に担保
