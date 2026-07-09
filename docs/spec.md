@@ -88,6 +88,10 @@ friction-harness/
 │   └── plugin.json             # plugin マニフェスト（name/version/description）。Phase 2 で有効化
 ├── hooks/
 │   └── hooks.json              # フック定義: イベント → ${CLAUDE_PLUGIN_ROOT}/10-collect/*.ts の写像のみ
+├── commands/                   # plugin 同梱の slash command（連番グループの薄いラッパー）
+│   ├── friction-report.md      #   /friction-report → 30-report/report.ts
+│   ├── friction-evaluate.md    #   /friction-evaluate → 20-evaluate/evaluate.ts の手動起動
+│   └── friction-promote.md     #   /friction-promote → 40-promote/promote.ts（提案のみ）
 ├── 10-collect/                 # 収集（L1）: フック実体。パイプラインの入口
 │   ├── log-skill-use.ts        #   スキル発動記録（PostToolUse, matcher: Skill）
 │   ├── guard-skill-size.ts     #   SKILL.md 行数バジェット強制（PostToolUse, matcher: Edit|Write）
@@ -123,8 +127,12 @@ plugin 規約との整合（Phase 2 を見据えた役割分離）:
   `commands/`, `agents/`, `skills/` のみで、連番ディレクトリとは衝突しない）。
 - `hooks/hooks.json` は Phase 1 から git 管理する（内容は §6 参照）。Phase 1 の `.claude/settings.json`
   登録はこれと同内容の絶対パス版であり、**二重管理になるため変更時は必ず両方を更新**する。
-- Phase 2 で `/friction-report` 等のスラッシュコマンドを提供する場合は予約ディレクトリ `commands/` を
-  追加し、30-report / 40-promote の薄いラッパーとする（実装は連番グループ側に置いたまま）。
+- 予約ディレクトリ `commands/` に slash command（`/friction-report` `/friction-evaluate`
+  `/friction-promote`）を同梱する。いずれも連番グループの実装を呼ぶ薄いラッパーであり、
+  実装は連番グループ側に置いたまま。パスは `${CLAUDE_PLUGIN_ROOT}` 参照のため
+  **plugin としてインストールされた場合にのみ機能する**。Phase 1 では `bun` で直接実行するか、
+  対象プロジェクトの `.claude/commands/` にコピーして `${CLAUDE_PLUGIN_ROOT}` をハーネスの
+  絶対パスに置換して使う。
 - plugin.json のフィールド詳細・hooks.json の正確なスキーマは Phase 2 着手時に実機の plugin
   ドキュメントで再確認する（§6 の実測確認と同じ扱い）。
 

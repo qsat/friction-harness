@@ -121,6 +121,28 @@ friction-harness 本体は 1 箇所に clone すれば十分。対象プロジ�
 の登録、allowlist、CLAUDE.md）を繰り返す。データは `~/.claude/friction-data/<project-id>/` に
 project-id ごと（= プロジェクトごと）に分離して溜まる。
 
+## slash command（plugin 同梱）
+
+`commands/` に 3 つの slash command を同梱している。いずれも連番グループの実装を呼ぶ薄いラッパー。
+
+| コマンド | 実体 | 用途 |
+|---|---|---|
+| `/friction-report` | `30-report/report.ts` | 集計レポートの表示 |
+| `/friction-evaluate` | `20-evaluate/evaluate.ts` | 突合バッチの手動起動 |
+| `/friction-promote` | `40-promote/promote.ts` | taxonomy 昇格提案の生成（提案のみ） |
+
+パスを `${CLAUDE_PLUGIN_ROOT}` で参照しているため、**plugin としてインストールした場合（Phase 2）に
+そのまま機能する**。Phase 1 で使いたい場合は、対象プロジェクトの `.claude/commands/` にコピーし、
+`${CLAUDE_PLUGIN_ROOT}` を friction-harness の絶対パスに置換する:
+
+```bash
+mkdir -p /path/to/target-project/.claude/commands
+for f in /path/to/friction-harness/commands/*.md; do
+  sed 's|${CLAUDE_PLUGIN_ROOT}|/path/to/friction-harness|g' "$f" \
+    > /path/to/target-project/.claude/commands/$(basename "$f")
+done
+```
+
 ## taxonomy の運用
 
 `taxonomy/taxonomy.yaml`・`taxonomy/aliases.yaml` はこのハーネス本体が持つグローバル語彙で、
