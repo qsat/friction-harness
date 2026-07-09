@@ -1,0 +1,5 @@
+# ログ記録対象スキルの allowlist（spec §3）。明示 opt-in: 列挙したスキルのみ記録される。
+# 例:
+# skills:
+#   - aidlc-planning
+skills: []
