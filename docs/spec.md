@@ -17,7 +17,9 @@ Claude Code スキルの改善ループを回すための「摩擦（friction）
 集計結果はスキル本文の改訂（supersede）と分類語彙（taxonomy)の進化の両方を駆動する。
 
 ### Phase 1 の完成条件
-1. スキル発動が 100% `invocations.jsonl` に記録される（フック経由・決定論的）
+1. スキル発動が 100% `invocations.jsonl` に記録される（フック経由・決定論的）。
+   対象は allowlist（`.claude/friction-skills.yaml`、§3）に登録されたスキルのみ。
+   未登録スキルは意図的に記録しない（明示 opt-in）
 2. セッション転写から issue が抽出され、全 issue が `(session_id, anchor_uuid)` で転写原文まで遡れる
 3. `report.ts` が alias 解決込みで issue_type 別 × skill 別の集計を出力できる
 4. 同じ転写範囲を二重処理しても issues が重複しない（冪等）
@@ -129,10 +131,20 @@ plugin 規約との整合（Phase 2 を見据えた役割分離）:
 ├── CLAUDE.md                   # 下記の摩擦明示ルールを 1 行追記
 └── .claude/
     ├── settings.json           # Phase 1: friction-harness を絶対パスで参照してフック登録
+    ├── friction-skills.yaml    # ログ記録対象スキルの allowlist（明示 opt-in）
     └── skills/<skill-slug>/
         ├── SKILL.md            # ルーター構造（目安 200 行、上限 500 行）
         └── references/         # 詳細手順・エッジケース（バジェット対象外）
 ```
+
+friction-skills.yaml の形式（ブロックリスト形式のみサポート。フロー形式 `[a, b]` は不可）:
+```yaml
+skills:
+  - aidlc-planning
+  - another-skill
+```
+- 記録対象は列挙されたスキルのみ。**ファイルが無い・空・未列挙の場合は記録しない**（明示 opt-in）。
+- フィルタはプロジェクト単位（cwd 基準で解決）。ハーネス側ではなく対象プロジェクト側に置く。
 
 CLAUDE.md 追記文（全スキル共通・これ 1 行のみ。スキル本文には報告指示を書かない）:
 
@@ -219,8 +231,10 @@ types:
 ### 5.1 10-collect/log-skill-use.sh（レイヤー1)
 - 登録: PostToolUse、matcher は Skill ツール（スキル発動)のみ。
 - stdin JSON から `session_id, tool_use_id, tool_input, transcript_path, cwd` を抽出（実測スキーマは §6）。
-- `tool_input` からスキル slug を取り出し、対応する SKILL.md の SHA-256 を計算して
-  `skill_content_hash` に含め、invocations.jsonl に 1 行追記。
+- **allowlist フィルタ**: `<cwd>/.claude/friction-skills.yaml` に slug が列挙されている場合のみ記録。
+  無い/未列挙なら何もせず exit 0（§3 の形式参照）。
+- `tool_input.skill` からスキル slug を取り出し、対応する SKILL.md の SHA-256 を計算して
+  `skill_content_hash` に含め、invocations.jsonl に 1 行追記（SKILL.md が見つからない場合は null）。
 - project-id 解決は cwd 基準。git サブプロセスは 1 回に抑える（結果を env/tmp にキャッシュ可)。
 - **必ず exit 0**（記録失敗でセッションを止めない)。処理は数十 ms に収める。
 

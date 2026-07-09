@@ -1,0 +1,10 @@
+{
+  "name": "friction-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Friction collection & distillation harness for Claude Code skills",
+  "dependencies": {
+    "yaml": "^2.6.0"
+  }
+}
